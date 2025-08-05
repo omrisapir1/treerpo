@@ -1,4 +1,4 @@
-# TreeRPO: Hierarchical Credit Assignment for Reasoning in LMs
+# TreeRPO: Hierarchical Credit Assignment for Reasoning in Language Models
 
 TreeRPO is a hierarchical extension of GRPO that grows a reasoning tree during training and assigns each intermediate node a reward equal to the average correctness of its descendant leaves—turning sparse pass/fail checks into smooth, step-level credit without a critic or reward model.
 
