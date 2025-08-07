@@ -16,8 +16,7 @@ from vllm import SamplingParams
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 
 
-from treerpo.utils.answers import extract_final_answer
-from treerpo.eval.metrics import math_equal
+from treerpo.utils.answers import extract_final_answer, math_equal
 from treerpo.utils.prompts import build_prompt_ids
 from treerpo.config import TreeRPOConfig as TreeConfig
 
