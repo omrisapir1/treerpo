@@ -19,7 +19,7 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 
 from treerpo import TreeRPOConfig
-from treerpo import TreeBuilder
+from treerpo.tree_builder.entropy_tree import TreeBuilder
 
 
 # ------------------------------ utilities ------------------------------ #

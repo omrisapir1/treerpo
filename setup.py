@@ -21,7 +21,7 @@ setup(
     description="TreeRPO: Hierarchical Credit Assignment for Reasoning in Language Models",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/omrisapir1/treerpo",  # update before publishing
+    url="https://github.com/omrisapir1/treerpo",
     license="Apache-2.0",
     python_requires=">=3.8",
     packages=find_packages(
