@@ -153,25 +153,32 @@ class TreeBuilder:
 
                 # Check entropy at each new token position
                 for token_index in range(token_counter, total_tokens):
-                    # Calculate entropy from logprobs (only needed for non-root splits)
-                    entropy = self._entropy_from_topk_logprobs(outs, token_index) if node.depth > 0 else 0.0
                     out_tokens = outs.token_ids[:token_index + 1]
                     out_text = self.tok.decode(out_tokens)
 
-                    # UNIFIED SPLITTING DECISION: forced first split OR entropy-based split
-                    # For depth 0: split immediately on first token (matching original ToE.py)
-                    # For depth > 0: use entropy + delimiter conditions
-                    should_split = (
-                        node.depth == 0  # Forced first split - immediate, no conditions
-                    ) or (
-                        node.depth > 0 and
-                        entropy > self.cfg.entropy_threshold and
-                        node.depth < self.cfg.max_depth and
-                        at_splitable_token and
-                        len(out_tokens) >= self.cfg.min_segment_len and
-                        out_text and out_text[-1] not in self.cfg.split_delimiters
-                    )
+                    # For depth 0: split immediately on first token (no conditions)
+                    # For depth > 0: check entropy and other conditions
+                    if node.depth == 0:
+                        should_split = True
+                    else:
+                        # Calculate entropy from logprobs (only for non-root splits)
+                        entropy = self._entropy_from_topk_logprobs(outs, token_index)
 
+                        # Entropy-based split conditions
+                        should_split = (
+                            entropy > self.cfg.entropy_threshold and
+                            node.depth < self.cfg.max_depth and
+                            at_splitable_token and
+                            len(out_tokens) >= self.cfg.min_segment_len and
+                            out_text and out_text[-1] not in self.cfg.split_delimiters
+                        )
+
+                    # For depth > 0, we need to set these variables for the split logic
+                    if node.depth > 0:
+                        out_tokens = outs.token_ids[:token_index + 1]
+                        out_text = self.tok.decode(out_tokens)
+
+                    # UNIFIED SPLITTING DECISION: entropy-based OR forced first split
                     if should_split:
                         # Update this node with completion up to the split point
                         take_from_prompt = (node.depth != 0)
