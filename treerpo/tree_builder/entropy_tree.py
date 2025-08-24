@@ -211,6 +211,7 @@ class TreeBuilder:
 
                         # Create two children: original + alternative (matching original ToE.py)
                         for forced_token in (last_token_id, alt_token_id):
+                            print(next_prompt_ids, forced_token)
                             child = TreeNode(
                                 prompt_ids=next_prompt_ids + [forced_token],
                                 depth=node.depth + 1,
