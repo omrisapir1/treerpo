@@ -278,7 +278,7 @@ class TreeBuilder:
         if remove_last_token and node.completion_ids:
             last_token_id = node.completion_ids[-1]
             node.completion_ids = node.completion_ids[:-1]
-        elif new_completion_ids is not None:
+        elif new_completion_ids:  # Match original ToE.py: use truthiness, not "is not None"
             node.completion_ids = new_completion_ids
 
         node.prompt_text = self.tok.decode(node.prompt_ids)
