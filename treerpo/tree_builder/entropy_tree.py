@@ -181,24 +181,30 @@ class TreeBuilder:
                         # Get alternative tokens for diversification
                         if outs.logprobs and token_index in outs.logprobs:
                             top_map = outs.logprobs[token_index]
+                            # Match original ToE.py: exclude the original token and sample from alternatives
                             alt_tokens = [(tid, entry.logprob) for tid, entry in top_map.items()
                                         if tid != last_token_id]
 
                             if alt_tokens:
-                                # Sample alternative token
+                                # Sample alternative token (matching original ToE.py exactly)
                                 token_ids, logprobs = zip(*alt_tokens)
                                 probs = np.exp(np.array(logprobs) / self.cfg.temperature)
                                 probs = probs / probs.sum()
                                 alt_token_id = int(np.random.choice(token_ids, p=probs))
-                            else:
-                                alt_token_id = last_token_id  # Fallback
-                        else:
-                            alt_token_id = last_token_id  # Fallback
 
-                        # Create two children with different tokens
-                        for chosen_token in [last_token_id, alt_token_id]:
+                                # Create children: original + alternative (matching original ToE.py)
+                                chosen_tokens = [last_token_id, alt_token_id]
+                            else:
+                                # Fallback: duplicate the same token
+                                chosen_tokens = [last_token_id, last_token_id]
+                        else:
+                            # Fallback: duplicate the same token
+                            chosen_tokens = [last_token_id, last_token_id]
+
+                        # Create two children with the chosen tokens
+                        for chosen_token in chosen_tokens:
                             child = TreeNode(
-                                prompt_ids=next_prompt_ids + [chosen_token],
+                                prompt_ids=next_prompt_ids + [int(chosen_token)],
                                 depth=node.depth + 1,
                                 parent=node
                             )
