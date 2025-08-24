@@ -131,8 +131,8 @@ class TreeBuilder:
                 top_p=self.cfg.top_p,
                 top_k=self.cfg.top_k,
                 repetition_penalty=self.cfg.repetition_penalty,
-                max_tokens=self.cfg.max_tokens,
-                logprobs=self.cfg.logprobs_k,
+                max_tokens=self.cfg.max_completion_length,
+                logprobs=self.cfg.entropy_top_k,
             )
 
             # Generate text for this node
@@ -220,7 +220,7 @@ class TreeBuilder:
                 # Look for coverage split opportunity
                 split_point = self._last_delimiter_before(
                     final_output.text,
-                    len(final_output.text) - self.cfg.coverage_split_min_chars
+                    len(final_output.text) - self.cfg.coverage_min_chars
                 )
 
                 if (split_point != -1 and
@@ -238,7 +238,7 @@ class TreeBuilder:
 
                     # Create coverage children
                     next_prompt_ids = node.prompt_ids + node.completion_ids
-                    num_coverage_children = getattr(self.cfg, 'coverage_split_children', 4)
+                    num_coverage_children = getattr(self.cfg, 'coverage_children_max', 4)
 
                     for _ in range(num_coverage_children):
                         child = TreeNode(
@@ -356,4 +356,3 @@ class TreeBuilder:
             out.append(n)
             st.extend(n.children)
         return out
-
