@@ -178,33 +178,30 @@ class TreeBuilder:
                         # Prepare next prompt for children
                         next_prompt_ids = node.prompt_ids + node.completion_ids
 
-                        # Get alternative tokens for diversification
+                        # Get alternative tokens for diversification (matching original ToE.py exactly)
                         if outs.logprobs and token_index in outs.logprobs:
+                            # Preprocess logprobs like original ToE.py
                             top_map = outs.logprobs[token_index]
-                            # Match original ToE.py: exclude the original token and sample from alternatives
-                            alt_tokens = [(tid, entry.logprob) for tid, entry in top_map.items()
-                                        if tid != last_token_id]
+                            top = {tid: -99 if np.isinf(entry.logprob) else entry.logprob
+                                   for tid, entry in top_map.items()}
 
-                            if alt_tokens:
-                                # Sample alternative token (matching original ToE.py exactly)
-                                token_ids, logprobs = zip(*alt_tokens)
-                                probs = np.exp(np.array(logprobs) / self.cfg.temperature)
+                            # Get candidates excluding the original token (matching original ToE.py)
+                            cand_items = [(t, lp) for t, lp in top.items() if t != last_token_id]
+
+                            if cand_items:
+                                cand_ids, cand_lps = zip(*cand_items)
+                                probs = np.exp(np.array(cand_lps) / self.cfg.temperature)
                                 probs = probs / probs.sum()
-                                alt_token_id = int(np.random.choice(token_ids, p=probs))
-
-                                # Create children: original + alternative (matching original ToE.py)
-                                chosen_tokens = [last_token_id, alt_token_id]
+                                alt_token_id = int(np.random.choice(cand_ids, p=probs))
                             else:
-                                # Fallback: duplicate the same token
-                                chosen_tokens = [last_token_id, last_token_id]
+                                alt_token_id = last_token_id  # Fallback
                         else:
-                            # Fallback: duplicate the same token
-                            chosen_tokens = [last_token_id, last_token_id]
+                            alt_token_id = last_token_id  # Fallback
 
-                        # Create two children with the chosen tokens
-                        for chosen_token in chosen_tokens:
+                        # Create two children: original + alternative (matching original ToE.py)
+                        for forced_token in (last_token_id, alt_token_id):
                             child = TreeNode(
-                                prompt_ids=next_prompt_ids + [int(chosen_token)],
+                                prompt_ids=next_prompt_ids + [forced_token],
                                 depth=node.depth + 1,
                                 parent=node
                             )
@@ -296,11 +293,11 @@ class TreeBuilder:
 
         # Check if the generated text is longer than the coverage threshold
         text_length = len(outs.text)
-        if text_length <= self.cfg.coverage_split_min_chars:
+        if text_length <= self.cfg.coverage_min_chars:
             return False
 
         # Look for a natural split point (delimiter) before the minimum coverage threshold
-        split_point = self._last_delimiter_before(outs.text, text_length - self.cfg.coverage_split_min_chars)
+        split_point = self._last_delimiter_before(outs.text, text_length - self.cfg.coverage_min_chars)
 
         # Only split if we found a delimiter and it's far enough from the start
         return split_point != -1 and split_point >= self.cfg.min_segment_len
