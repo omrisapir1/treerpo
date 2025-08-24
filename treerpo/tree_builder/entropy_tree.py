@@ -1,20 +1,12 @@
-# ======================================================================
-# TreeRPO — Refactored Implementation (async, vLLM-compatible)
-# ======================================================================
-from __future__ import annotations
-
 import asyncio
-import uuid
 import random
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional
 
 import numpy as np
 from transformers import AutoTokenizer
-from vllm import SamplingParams
 from vllm.engine.async_llm_engine import AsyncLLMEngine
-
 
 from treerpo.utils.answers import extract_final_answer, math_equal
 from treerpo.utils.prompts import build_prompt_ids
@@ -90,21 +82,21 @@ class TreeBuilder:
         """Build a full reasoning tree for a single prompt."""
         root = TreeNode(prompt_ids=build_prompt_ids(self.tok, problem), depth=0, parent=None)
 
-        # Maintain a task list scoped to this call (avoids cross-call races)
+        # Start with the root node - the unified _spawn_node handles the forced first split
         tasks: list[asyncio.Task] = []
+        await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
 
-        # Handle forced root split before any streaming begins
-        if self.cfg.forced_root_split:
-            await self._handle_forced_root_split(root, final_answer, tasks)
-        else:
-            await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
+        # Wait for all spawned tasks (matching original ToE logic)
+        if tasks:
+            await asyncio.gather(*tasks)
 
-        # Wait for all spawned tasks (children/grandchildren)
-        while True:
-            pending = [t for t in tasks if not t.done()]
-            if not pending:
-                break
-            await asyncio.gather(*pending)
+            while True:
+                # Keep only tasks that are not finished yet
+                pending = [t for t in tasks if not t.done()]
+                if not pending:
+                    break
+                # Await the current batch; new tasks may be appended meanwhile
+                await asyncio.gather(*pending)
 
         # Reward propagation: leaves already have reward; push up then set interior means
         for n in self._collect_nodes(root):
@@ -115,76 +107,6 @@ class TreeBuilder:
 
         return root
 
-    # ---------------------------- Forced root split ------------------------
-    async def _handle_forced_root_split(self, root: TreeNode, final_answer: str, tasks: list[asyncio.Task]) -> None:
-        """Handle the special case of forced root split before any tokens are generated."""
-        prompt_text = self.tok.decode(root.prompt_ids)
-
-        # Get initial token distribution without streaming
-        sampling_params = SamplingParams(
-            temperature=self.cfg.temperature,
-            top_p=self.cfg.top_p,
-            top_k=self.cfg.top_k,
-            logprobs=self.cfg.entropy_top_k,
-            max_tokens=1  # Just need first token distribution
-        )
-
-        request_id = str(uuid.uuid4())
-        try:
-            # Get first token distribution
-            result = await self.engine.generate(prompt_text, sampling_params, request_id=request_id)
-            output = result.outputs[0]
-
-            # Get logprobs for first token position
-            if not output.logprobs or 0 not in output.logprobs:
-                # Fallback if logprobs not available
-                await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
-                return
-
-            # Get token distribution
-            top_map = output.logprobs[0]
-            tokens = list(top_map.keys())
-
-            if len(tokens) < 2:
-                # Fallback if not enough tokens
-                await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
-                return
-
-            # Convert to probabilities
-            logprobs = [top_map[t].logprob for t in tokens]
-            probs = np.exp(np.array(logprobs) / self.cfg.temperature)
-            probs /= probs.sum()
-
-            # Sample first token
-            first_token = int(np.random.choice(tokens, p=probs))
-
-            # Sample different second token (exclude first token)
-            remaining_tokens = [t for t in tokens if t != first_token]
-            remaining_probs = np.array([top_map[t].logprob for t in remaining_tokens])
-            remaining_probs = np.exp(remaining_probs / self.cfg.temperature)
-            remaining_probs /= remaining_probs.sum()
-            second_token = int(np.random.choice(remaining_tokens, p=remaining_probs))
-
-            # Create two children with different first tokens
-            for token in (first_token, second_token):
-                child = TreeNode(
-                    prompt_ids=root.prompt_ids.copy(),
-                    depth=1,
-                    parent=root
-                )
-                # Add the token as the first token in prompt_ids for the child
-                child.prompt_ids = root.prompt_ids + [token]
-                root.add_child(child)
-                # Schedule each child for normal generation
-                self._schedule_child(child, final_answer=final_answer, coverage_mode=False, tasks=tasks)
-
-            # Successfully handled forced root split
-            await self.engine.abort(request_id=request_id)
-
-        except Exception as e:
-            # Fallback to regular generation if anything fails
-            print(f"Forced root split failed: {e}")
-            await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
 
     # ---------------------------- Node growth ---------------------------
     async def _spawn_node(
@@ -196,155 +118,186 @@ class TreeBuilder:
         tasks: list[asyncio.Task],
     ) -> None:
         """
-        Grow a node into either interior (split) or leaf (terminate).
-        If coverage_mode is True: generate to leaf with NO further splitting.
+        Unified node spawning method that handles all splitting logic inline.
+        Based on the original ToE._spawn method structure.
         """
         async with self.sem:
+            from vllm import SamplingParams
+            import uuid
+
+            # Set up sampling parameters
             params = SamplingParams(
                 temperature=self.cfg.temperature,
                 top_p=self.cfg.top_p,
                 top_k=self.cfg.top_k,
                 repetition_penalty=self.cfg.repetition_penalty,
-                max_tokens=self.cfg.max_completion_length,
-                logprobs=self.cfg.entropy_top_k,  # compute entropy over top-K
+                max_tokens=self.cfg.max_tokens,
+                logprobs=self.cfg.logprobs_k,
             )
 
+            # Generate text for this node
             prompt_text = self.tok.decode(node.prompt_ids)
-            request_id = str(uuid.uuid4())
+            token_counter = 0
+            at_splitable_token = False
 
-            did_split = False
-            last_outs = None
+            async for chunk in self.engine.generate(prompt_text, params, request_id=str(uuid.uuid4())):
+                if coverage_mode:
+                    continue  # Skip splitting logic in coverage mode
 
-            # Stream tokens from vLLM
-            try:
-                token_idx_processed = 0
-                prev_token_was_delim = False  # "just after delimiter" = prev=True and current not delimiter
+                outs = chunk.outputs[0]
+                total_tokens = len(outs.token_ids)
 
-                async for chunk in self.engine.generate(prompt_text, params, request_id=request_id):
-                    outs = chunk.outputs[0]
-                    last_outs = outs  # keep last for coverage decisions
+                # Skip if we don't have enough tokens yet (except for root)
+                if node.depth > 0 and total_tokens < self.cfg.min_segment_len:
+                    continue
 
-                    # Depth limit: depth >= max_depth means NO MORE splits, but still generate to leaf.
-                    allow_splitting = (not coverage_mode) and (node.depth < self.cfg.max_depth)
+                # Check entropy at each new token position
+                for token_index in range(token_counter, total_tokens):
+                    # Calculate entropy from logprobs
+                    entropy = self._entropy_from_topk_logprobs(outs, token_index)
+                    out_tokens = outs.token_ids[:token_index + 1]
+                    out_text = self.tok.decode(out_tokens)
 
-                    # Iterate new token positions since last iteration
-                    total = len(outs.token_ids)
-                    if total <= token_idx_processed:
-                        continue
+                    # UNIFIED SPLITTING DECISION: entropy-based OR forced first split
+                    should_split = (
+                        (entropy > self.cfg.entropy_threshold and
+                         node.depth < self.cfg.max_depth and
+                         at_splitable_token and
+                         len(out_tokens) >= self.cfg.min_segment_len and
+                         out_text and out_text[-1] not in self.cfg.split_delimiters) or
+                        (node.depth == 0)  # Forced first split
+                    )
 
-                    # Update completion_ids incrementally
-                    new_token_ids = outs.token_ids[token_idx_processed:total]
-                    node.completion_ids.extend(new_token_ids)
+                    if should_split:
+                        # Update this node with completion up to the split point
+                        take_from_prompt = (node.depth != 0)
+                        last_token_id = self._update_node_with_output(
+                            node, out_tokens, take_from_prompt, remove_last_token=True
+                        )
 
-                    # Update delimiter detector (token-level approximation)
-                    decoded_now = self.tok.decode(node.completion_ids)
-                    now_ends_with_delim = decoded_now[-1] in self.cfg.split_delimiters if decoded_now else False
-                    just_after_delim = (prev_token_was_delim and not now_ends_with_delim)
+                        # Prepare next prompt for children
+                        next_prompt_ids = node.prompt_ids + node.completion_ids
 
-                    # Consider splitting if allowed (forced_root handled separately now)
-                    if allow_splitting and (
-                        self._segment_long_enough(node) and just_after_delim
-                        and self._entropy_from_topk_logprobs(outs, at_index=total - 1) >= self.cfg.entropy_threshold
-                    ):
-                        # Prepare parent to end EXACTLY at the split boundary:
-                        if node.completion_ids:
-                            first_token_for_child = node.completion_ids.pop()  # original token
-                        else:
-                            first_token_for_child = outs.token_ids[total - 1]
+                        # Get alternative tokens for diversification
+                        if outs.logprobs and token_index in outs.logprobs:
+                            top_map = outs.logprobs[token_index]
+                            alt_tokens = [(tid, entry.logprob) for tid, entry in top_map.items()
+                                        if tid != last_token_id]
 
-                        # Abort parent stream to free resources
-                        await self.engine.abort(request_id=request_id)
-
-                        # Parent's fixed text contexts
-                        parent_prompt_ids = node.prompt_ids
-                        parent_completion_ids = node.completion_ids
-                        shared_prefix = parent_prompt_ids + parent_completion_ids  # children start from here
-
-                        # Compute alternative first token (exclude original)
-                        top_map = outs.logprobs[total - 1] if (outs.logprobs and total - 1 in outs.logprobs) else None
-                        if not top_map:
-                            alt_token = first_token_for_child
-                        else:
-                            cand = [(tid, lp.logprob) for tid, lp in top_map.items() if tid != first_token_for_child]
-                            if not cand:
-                                alt_token = first_token_for_child
+                            if alt_tokens:
+                                # Sample alternative token
+                                token_ids, logprobs = zip(*alt_tokens)
+                                probs = np.exp(np.array(logprobs) / self.cfg.temperature)
+                                probs = probs / probs.sum()
+                                alt_token_id = int(np.random.choice(token_ids, p=probs))
                             else:
-                                cand_ids, cand_lps = zip(*cand)
-                                logits = np.array(cand_lps, dtype=float)
-                                probs = np.exp(logits / max(self.cfg.temperature, 1e-8))
-                                probs /= probs.sum()
-                                alt_token = int(np.random.choice(cand_ids, p=probs))
+                                alt_token_id = last_token_id  # Fallback
+                        else:
+                            alt_token_id = last_token_id  # Fallback
 
-                        # Create exactly two children
-                        for t0 in (first_token_for_child, alt_token):
-                            child = TreeNode(prompt_ids=shared_prefix + [t0], depth=node.depth + 1, parent=node)
+                        # Create two children with different tokens
+                        for chosen_token in [last_token_id, alt_token_id]:
+                            child = TreeNode(
+                                prompt_ids=next_prompt_ids + [chosen_token],
+                                depth=node.depth + 1,
+                                parent=node
+                            )
                             node.add_child(child)
                             self._schedule_child(child, final_answer=final_answer, coverage_mode=False, tasks=tasks)
 
-                        did_split = True
-                        break  # stop processing this node; children continue
+                        return  # Stop this generation stream
 
-                    # Update delimiter tracker for next step
-                    prev_token_was_delim = now_ends_with_delim
-                    token_idx_processed = total
+                    # Update delimiter tracking
+                    at_splitable_token = (out_text and out_text[-1] in self.cfg.split_delimiters) if out_text else False
 
-            except Exception as e:
-                # Log the exception but continue to process the node
-                print(f"Error during generation: {e}")
-                # Don't set did_split to True here - allow fallthrough to the leaf handling
+                token_counter = total_tokens
 
-            # Only return early if we successfully split the node
-            if did_split:
-                return
+            # Generation completed - handle coverage split or finalize
+            final_output = chunk.outputs[0]
 
-            # --- No split happened during streaming ---
-            # If we get here, the node generated to EOS or max tokens.
-            if (not coverage_mode) and self._maybe_should_add_coverage(node, last_outs):
-                # Create up to N coverage children at the last safe delimiter
-                # and let them CONTINUE GENERATION but with splitting DISABLED.
-                self._spawn_coverage_children(node, last_outs, final_answer=final_answer, tasks=tasks)
-                return
+            # COVERAGE SPLIT LOGIC (matching original ToE)
+            if not coverage_mode:
+                # Look for coverage split opportunity
+                split_point = self._last_delimiter_before(
+                    final_output.text,
+                    len(final_output.text) - self.cfg.coverage_split_min_chars
+                )
 
-            # Otherwise: finalize as a leaf and score
+                if (split_point != -1 and
+                    split_point >= self.cfg.min_segment_len):
+
+                    # Truncate this node at the split point
+                    truncated_text = final_output.text[:split_point + 1]
+                    truncated_ids = self.tok.encode(truncated_text, add_special_tokens=False)
+
+                    take_from_prompt = (node.depth != 0)
+                    self._update_node_with_output(
+                        node, final_output.token_ids, take_from_prompt,
+                        remove_last_token=False, new_completion_ids=truncated_ids
+                    )
+
+                    # Create coverage children
+                    next_prompt_ids = node.prompt_ids + node.completion_ids
+                    num_coverage_children = getattr(self.cfg, 'coverage_split_children', 4)
+
+                    for _ in range(num_coverage_children):
+                        child = TreeNode(
+                            prompt_ids=next_prompt_ids,
+                            depth=node.depth + 1,
+                            parent=node
+                        )
+                        node.add_child(child)
+                        self._schedule_child(child, final_answer=final_answer, coverage_mode=True, tasks=tasks)
+
+                    return
+
+            # TERMINAL LEAF: finalize this node
+            take_from_prompt = (node.depth != 0) if not coverage_mode else False
+            self._update_node_with_output(
+                node, final_output.token_ids, take_from_prompt, remove_last_token=False
+            )
             self._finalize_leaf(node)
             node.reward = self._score_leaf(node, final_answer)
+
+    def _update_node_with_output(self, node: TreeNode, output_tokens: list,
+                                take_one_from_prompt: bool, remove_last_token: bool,
+                                new_completion_ids=None) -> int:
+        """Update node with generation output, matching original ToE logic."""
+        last_token_id = None
+        init_addition_tokens = []
+
+        if take_one_from_prompt and node.prompt_ids:
+            init_addition_tokens.append(node.prompt_ids[-1])
+            node.prompt_ids = node.prompt_ids[:-1]
+
+        node.completion_ids = init_addition_tokens + output_tokens
+
+        if remove_last_token and node.completion_ids:
+            last_token_id = node.completion_ids[-1]
+            node.completion_ids = node.completion_ids[:-1]
+        elif new_completion_ids is not None:
+            node.completion_ids = new_completion_ids
+
+        node.prompt_text = self.tok.decode(node.prompt_ids)
+        node.completion_text = self.tok.decode(node.completion_ids)
+        return last_token_id
 
     # ---------------------------- Coverage helpers ----------------------
     def _maybe_should_add_coverage(self, node: TreeNode, outs) -> bool:
         """Decide whether to perform a post-hoc coverage split."""
-        if outs is None:
-            return False
-        # Require at least S_min chars after the split point
-        text = outs.text or self.tok.decode(node.completion_ids)
-        if len(text) < self.cfg.coverage_min_chars:
+        if not outs or not outs.text:
             return False
 
-        # Find last delimiter occurring ≥ S_min chars before the end
-        cutoff = len(text) - self.cfg.coverage_min_chars
-        last_idx = self._last_delimiter_before(text, cutoff)
-        if last_idx < 0:
+        # Check if the generated text is longer than the coverage threshold
+        text_length = len(outs.text)
+        if text_length <= self.cfg.coverage_split_min_chars:
             return False
 
-        # Also require segment length ≥ L_min tokens when truncated to that delimiter
-        truncated = text[: last_idx + 1]
-        trunc_ids = self.tok.encode(truncated, add_special_tokens=False)
-        if len(trunc_ids) < self.cfg.min_segment_len:
-            return False
+        # Look for a natural split point (delimiter) before the minimum coverage threshold
+        split_point = self._last_delimiter_before(outs.text, text_length - self.cfg.coverage_split_min_chars)
 
-        # Cache truncation on node for spawn_coverage_children
-        node._coverage_trunc_ids = trunc_ids   # attach ephemeral attribute
-        node._coverage_shared_prefix = node.prompt_ids + trunc_ids
-        return True
-
-    def _spawn_coverage_children(self, node: TreeNode, outs, *, final_answer: str, tasks: list[asyncio.Task]) -> None:
-        """Spawn up to cfg.coverage_children_max children from the coverage split point."""
-        shared_prefix = node._coverage_shared_prefix  # set in _maybe_should_add_coverage
-        n_children = int(self.cfg.coverage_children_max)
-        for _ in range(n_children):
-            child = TreeNode(prompt_ids=list(shared_prefix), depth=node.depth + 1, parent=node)
-            node.add_child(child)
-            # coverage_mode=True => generate to leaf; NO splitting or re-coverage
-            self._schedule_child(child, final_answer=final_answer, coverage_mode=True, tasks=tasks)
+        # Only split if we found a delimiter and it's far enough from the start
+        return split_point != -1 and split_point >= self.cfg.min_segment_len
 
     # ---------------------------- Scheduling ----------------------------
     def _schedule_child(self, child: TreeNode, *, final_answer: str, coverage_mode: bool, tasks: list[asyncio.Task]) -> None:
@@ -403,3 +356,4 @@ class TreeBuilder:
             out.append(n)
             st.extend(n.children)
         return out
+
