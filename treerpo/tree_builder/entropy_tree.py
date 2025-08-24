@@ -39,7 +39,7 @@ class TreeNode:
     parent: Optional["TreeNode"] = None
     children: List["TreeNode"] = field(default_factory=list)
 
-    # Local “thought span” (this node’s continuation)
+    # Local "thought span" (this node's continuation)
     completion_ids: List[int] = field(default_factory=list)
 
     # Text caches (filled on finalize)
@@ -92,7 +92,12 @@ class TreeBuilder:
 
         # Maintain a task list scoped to this call (avoids cross-call races)
         tasks: list[asyncio.Task] = []
-        await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
+
+        # Handle forced root split before any streaming begins
+        if self.cfg.forced_root_split:
+            await self._handle_forced_root_split(root, final_answer, tasks)
+        else:
+            await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
 
         # Wait for all spawned tasks (children/grandchildren)
         while True:
@@ -109,6 +114,77 @@ class TreeBuilder:
             n.finalize_interior_reward()
 
         return root
+
+    # ---------------------------- Forced root split ------------------------
+    async def _handle_forced_root_split(self, root: TreeNode, final_answer: str, tasks: list[asyncio.Task]) -> None:
+        """Handle the special case of forced root split before any tokens are generated."""
+        prompt_text = self.tok.decode(root.prompt_ids)
+
+        # Get initial token distribution without streaming
+        sampling_params = SamplingParams(
+            temperature=self.cfg.temperature,
+            top_p=self.cfg.top_p,
+            top_k=self.cfg.top_k,
+            logprobs=self.cfg.entropy_top_k,
+            max_tokens=1  # Just need first token distribution
+        )
+
+        request_id = str(uuid.uuid4())
+        try:
+            # Get first token distribution
+            result = await self.engine.generate(prompt_text, sampling_params, request_id=request_id)
+            output = result.outputs[0]
+
+            # Get logprobs for first token position
+            if not output.logprobs or 0 not in output.logprobs:
+                # Fallback if logprobs not available
+                await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
+                return
+
+            # Get token distribution
+            top_map = output.logprobs[0]
+            tokens = list(top_map.keys())
+
+            if len(tokens) < 2:
+                # Fallback if not enough tokens
+                await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
+                return
+
+            # Convert to probabilities
+            logprobs = [top_map[t].logprob for t in tokens]
+            probs = np.exp(np.array(logprobs) / self.cfg.temperature)
+            probs /= probs.sum()
+
+            # Sample first token
+            first_token = int(np.random.choice(tokens, p=probs))
+
+            # Sample different second token (exclude first token)
+            remaining_tokens = [t for t in tokens if t != first_token]
+            remaining_probs = np.array([top_map[t].logprob for t in remaining_tokens])
+            remaining_probs = np.exp(remaining_probs / self.cfg.temperature)
+            remaining_probs /= remaining_probs.sum()
+            second_token = int(np.random.choice(remaining_tokens, p=remaining_probs))
+
+            # Create two children with different first tokens
+            for token in (first_token, second_token):
+                child = TreeNode(
+                    prompt_ids=root.prompt_ids.copy(),
+                    depth=1,
+                    parent=root
+                )
+                # Add the token as the first token in prompt_ids for the child
+                child.prompt_ids = root.prompt_ids + [token]
+                root.add_child(child)
+                # Schedule each child for normal generation
+                self._schedule_child(child, final_answer=final_answer, coverage_mode=False, tasks=tasks)
+
+            # Successfully handled forced root split
+            await self.engine.abort(request_id=request_id)
+
+        except Exception as e:
+            # Fallback to regular generation if anything fails
+            print(f"Forced root split failed: {e}")
+            await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
 
     # ---------------------------- Node growth ---------------------------
     async def _spawn_node(
@@ -165,14 +241,11 @@ class TreeBuilder:
                     now_ends_with_delim = decoded_now[-1] in self.cfg.split_delimiters if decoded_now else False
                     just_after_delim = (prev_token_was_delim and not now_ends_with_delim)
 
-
-                    forced_root = self.cfg.forced_root_split and (node.depth == 0 and token_idx_processed == 0)
-
-                    # Consider splitting if allowed
-                    if allow_splitting and (forced_root or (
+                    # Consider splitting if allowed (forced_root handled separately now)
+                    if allow_splitting and (
                         self._segment_long_enough(node) and just_after_delim
                         and self._entropy_from_topk_logprobs(outs, at_index=total - 1) >= self.cfg.entropy_threshold
-                    )):
+                    ):
                         # Prepare parent to end EXACTLY at the split boundary:
                         if node.completion_ids:
                             first_token_for_child = node.completion_ids.pop()  # original token
@@ -215,10 +288,12 @@ class TreeBuilder:
                     prev_token_was_delim = now_ends_with_delim
                     token_idx_processed = total
 
-            finally:
-                # If split happened, we already aborted the stream and scheduled children
-                pass
+            except Exception as e:
+                # Log the exception but continue to process the node
+                print(f"Error during generation: {e}")
+                # Don't set did_split to True here - allow fallthrough to the leaf handling
 
+            # Only return early if we successfully split the node
             if did_split:
                 return
 
@@ -273,15 +348,20 @@ class TreeBuilder:
 
     # ---------------------------- Scheduling ----------------------------
     def _schedule_child(self, child: TreeNode, *, final_answer: str, coverage_mode: bool, tasks: list[asyncio.Task]) -> None:
-        tasks.append(asyncio.create_task(self._spawn_node(child, final_answer=final_answer, coverage_mode=coverage_mode, tasks=tasks)))
+        """Schedule a child node for asynchronous generation."""
+        tasks.append(asyncio.create_task(
+            self._spawn_node(child, final_answer=final_answer, coverage_mode=coverage_mode, tasks=tasks)
+        ))
 
     # ---------------------------- Termination & scoring -----------------
     def _finalize_leaf(self, node: TreeNode) -> None:
+        """Mark a node as terminal and decode its text."""
         node.state = NodeState.TERMINAL
         node.prompt_text = self.tok.decode(node.prompt_ids)
         node.completion_text = self.tok.decode(node.completion_ids)
 
     def _score_leaf(self, node: TreeNode, final_answer: str) -> float:
+        """Score a leaf node based on whether its answer matches the reference."""
         pred = extract_final_answer(node.completion_text)
         try:
             return float(int(math_equal(pred, final_answer)))
@@ -290,6 +370,7 @@ class TreeBuilder:
 
     # ---------------------------- Predicates & utilities ----------------
     def _segment_long_enough(self, node: TreeNode) -> bool:
+        """Check if the current completion segment is long enough to split."""
         return len(node.completion_ids) >= self.cfg.min_segment_len
 
     def _entropy_from_topk_logprobs(self, outs, at_index: int) -> float:
@@ -314,6 +395,7 @@ class TreeBuilder:
         return -1
 
     def _collect_nodes(self, root: TreeNode) -> List[TreeNode]:
+        """Collect all nodes in the tree in post-order."""
         out: List[TreeNode] = []
         st = [root]
         while st:
