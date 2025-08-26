@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 from collections import defaultdict
@@ -176,9 +175,11 @@ class TreeRPOTrainer(Trainer):
             self._vllm_model_dir = os.path.join(self.args.output_dir, "_vllm_model")
             _ensure_dir(self._vllm_model_dir)
 
-            # Save current HF weights there so the engine can load immediately.
+            # Save current HF weights AND tokenizer there so the engine can load immediately.
             unwrapped = self.accelerator.unwrap_model(self.model) if hasattr(self, "accelerator") else self.model
             unwrapped.save_pretrained(self._vllm_model_dir, safe_serialization=True)
+            # CRITICAL: Also save tokenizer to the same directory
+            self.tokenizer.save_pretrained(self._vllm_model_dir)
 
             vllm_dtype = _to_vllm_dtype_str(getattr(args, "torch_dtype", None), self.model)
 
