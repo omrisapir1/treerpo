@@ -123,8 +123,6 @@ class TreeRPOTrainer(Trainer):
         model_id: str
         if isinstance(model, str):
             model_id = model
-            if args.torch_dtype is not None:
-                model_init_kwargs.setdefault("torch_dtype", args.torch_dtype)
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 **model_init_kwargs,
