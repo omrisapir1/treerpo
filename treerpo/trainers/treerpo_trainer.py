@@ -195,6 +195,7 @@ class TreeRPOTrainer(Trainer):
                 enable_prefix_caching=True,
             )
             self.vllm_engine = AsyncLLMEngine.from_engine_args(engine_args)
+            self.vllm_engine.log_requests = False
 
         if self.vllm_engine is None:
             raise ValueError("TreeRPOTrainer currently assumes use_vllm=True for tree building.")

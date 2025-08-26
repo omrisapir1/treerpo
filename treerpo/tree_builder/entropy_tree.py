@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 import random
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -61,6 +63,19 @@ class TreeNode:
         else:
             self.reward = 0.0
 
+    def to_dict(self):
+        return {
+            "prompt_ids": self.prompt_ids,
+            "completion_ids": self.completion_ids,
+            "prompt_text": self.prompt_text,
+            "completion_text": self.completion_text,
+            "reward": self.reward,
+            "rewards": self.rewards_accum,
+            "depth": self.depth,
+            "children": [c.to_dict() for c in self.children],
+
+        }
+
 
 # ----------------------------------------------------------------------
 # Main builder
@@ -104,6 +119,15 @@ class TreeBuilder:
                 n.propagate_reward_up(n.reward or 0.0)
         for n in self._collect_nodes(root):
             n.finalize_interior_reward()
+
+        js = root.to_dict()
+        js['final_answer'] = final_answer
+        path = '/workspace/data'
+        if not os.path.exists(path):
+            os.mkdir(path)
+        import time
+        json.dump( js, open(os.path.join(path, f"{time.time()}.json"),'w'))
+
 
         return root
 
@@ -158,11 +182,13 @@ class TreeBuilder:
 
                     # For depth 0: split immediately on first token (no conditions)
                     # For depth > 0: check entropy and other conditions
+                    top_candidates= {tid: -99 if np.isinf(e.logprob) else e.logprob for tid, e in
+                           outs.logprobs[token_index].items()} if outs.logprobs else {}
                     if node.depth == 0:
                         should_split = True
                     else:
                         # Calculate entropy from logprobs (only for non-root splits)
-                        entropy = self._entropy_from_topk_logprobs(outs, token_index)
+                        entropy = self._entropy_from_topk_logprobs(top_candidates)
 
                         # Entropy-based split conditions
                         should_split = (
@@ -186,32 +212,31 @@ class TreeBuilder:
                             node, out_tokens, take_from_prompt, remove_last_token=True
                         )
 
+
                         # Prepare next prompt for children
                         next_prompt_ids = node.prompt_ids + node.completion_ids
 
                         # Get alternative tokens for diversification (matching original ToE.py exactly)
-                        if outs.logprobs and token_index in outs.logprobs:
+                        # if outs.logprobs and token_index in outs.logprobs:
                             # Preprocess logprobs like original ToE.py
-                            top_map = outs.logprobs[token_index]
-                            top = {tid: -99 if np.isinf(entry.logprob) else entry.logprob
-                                   for tid, entry in top_map.items()}
 
                             # Get candidates excluding the original token (matching original ToE.py)
-                            cand_items = [(t, lp) for t, lp in top.items() if t != last_token_id]
+                        cand_items = [(t, lp) for t, lp in top_candidates.items() if t != last_token_id]
 
-                            if cand_items:
-                                cand_ids, cand_lps = zip(*cand_items)
-                                probs = np.exp(np.array(cand_lps) / self.cfg.temperature)
-                                probs = probs / probs.sum()
-                                alt_token_id = int(np.random.choice(cand_ids, p=probs))
-                            else:
-                                alt_token_id = last_token_id  # Fallback
+
+                        if cand_items:
+                            cand_ids, cand_lps = zip(*cand_items)
+                            probs = np.exp(np.array(cand_lps) / self.cfg.temperature)
+                            probs = probs / probs.sum()
+                            alt_token_id = int(np.random.choice(cand_ids, p=probs))
                         else:
                             alt_token_id = last_token_id  # Fallback
+                        # else:
+                        #     alt_token_id = last_token_id  # Fallback
 
                         # Create two children: original + alternative (matching original ToE.py)
                         for forced_token in (last_token_id, alt_token_id):
-                            print(next_prompt_ids, forced_token)
+
                             child = TreeNode(
                                 prompt_ids=next_prompt_ids + [forced_token],
                                 depth=node.depth + 1,
@@ -246,6 +271,7 @@ class TreeBuilder:
                     truncated_ids = self.tok.encode(truncated_text, add_special_tokens=False)
 
                     take_from_prompt = (node.depth != 0)
+
                     self._update_node_with_output(
                         node, final_output.token_ids, take_from_prompt,
                         remove_last_token=False, new_completion_ids=truncated_ids
@@ -280,18 +306,17 @@ class TreeBuilder:
         """Update node with generation output, matching original ToE logic."""
         last_token_id = None
         init_addition_tokens = []
-
-        if take_one_from_prompt and node.prompt_ids:
-            init_addition_tokens.append(node.prompt_ids[-1])
-            node.prompt_ids = node.prompt_ids[:-1]
-
-        node.completion_ids = init_addition_tokens + output_tokens
-
+        node.completion_ids = output_tokens
         if remove_last_token and node.completion_ids:
             last_token_id = node.completion_ids[-1]
             node.completion_ids = node.completion_ids[:-1]
         elif new_completion_ids:  # Match original ToE.py: use truthiness, not "is not None"
             node.completion_ids = new_completion_ids
+
+        if take_one_from_prompt and node.prompt_ids:
+            init_addition_tokens.append(node.prompt_ids[-1])
+            node.prompt_ids = node.prompt_ids[:-1]
+            node.completion_ids = init_addition_tokens + node.completion_ids
 
         node.prompt_text = self.tok.decode(node.prompt_ids)
         node.completion_text = self.tok.decode(node.completion_ids)
@@ -341,19 +366,13 @@ class TreeBuilder:
         """Check if the current completion segment is long enough to split."""
         return len(node.completion_ids) >= self.cfg.min_segment_len
 
-    def _entropy_from_topk_logprobs(self, outs, at_index: int) -> float:
-        """Shannon entropy from vLLM's logprobs dict at a given token index (top-K only)."""
-        if outs is None or not outs.logprobs or at_index not in outs.logprobs:
-            return 0.0
-        top_map = outs.logprobs[at_index]
-        if not top_map or len(top_map) < 2:
-            return 0.0
-        # vLLM returns {token_id: Logprob(token, logprob, rank, ...)}
-        vals = np.array([entry.logprob for entry in top_map.values()], dtype=float)
-        # normalize within top-K
-        p = np.exp(vals - vals.max())
-        p /= p.sum()
-        return float(-(p * np.log(p + 1e-12)).sum())
+    def _entropy_from_topk_logprobs(self, top_candidates: dict) -> float:
+        """Entropy from vLLM's logprobs dict at a given token index (top-K only)."""
+        if len(top_candidates) > 1:
+            p = np.exp(list(top_candidates.values()));
+            p /= p.sum()
+            return float(-(p * np.log(p)).sum())
+        return 0.0
 
     def _last_delimiter_before(self, s: str, cutoff: int) -> int:
         """Return last index in s[:cutoff] that is a delimiter; -1 if none."""

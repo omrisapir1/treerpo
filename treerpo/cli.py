@@ -79,7 +79,7 @@ def add_train_subparser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--entropy_threshold", type=float, default=1.0, help="H_th: entropy gate at split point.")
     p.add_argument("--entropy_topk", type=int, default=20, help="Top-K for entropy computation.")
     p.add_argument("--coverage_min_chars", type=int, default=150, help="S_min for coverage split.")
-    p.add_argument("--coverage_children_max", type=int, default=4, help="Max coverage children.")
+    p.add_argument("--coverage_children_max", type=int, default=2, help="Max coverage children.")
 
     # decoding params for node continuations
     p.add_argument("--temperature", type=float, default=0.6)
