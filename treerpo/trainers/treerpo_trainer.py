@@ -20,6 +20,11 @@ from vllm.engine.async_llm_engine import AsyncLLMEngine
 from treerpo import TreeRPOConfig
 from treerpo.tree_builder.entropy_tree import TreeBuilder
 
+# If you plan to run in notebooks, install nest_asyncio once:
+# pip install nest_asyncio
+import nest_asyncio
+nest_asyncio.apply()
+
 
 # ------------------------------ utilities ------------------------------ #
 
@@ -62,19 +67,19 @@ def _to_vllm_dtype_str(torch_dtype: Optional[torch.dtype], model: nn.Module) -> 
         return "auto"
 
 
-def _run_coro_blocking(coro):
-    """Run an async coroutine from sync code, safely."""
+def run_async(coro):
+    """
+    Execute *coro* (a coroutine) and return its result.
+
+    • In a normal Python script     → starts a fresh event loop.
+    • In a running event-loop (e.g. Jupyter) → re-uses that loop safely.
+    """
     try:
         loop = asyncio.get_running_loop()
+        # Already inside an event-loop (Jupyter, web-server …)
+        return loop.run_until_complete(coro)
     except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        # If we're already in an event loop, use run_coroutine_threadsafe
-        fut = asyncio.run_coroutine_threadsafe(coro, loop)
-        return fut.result()
-    else:
-        # If no event loop is running, create a new one
+        # No loop running – create one
         return asyncio.run(coro)
 
 
@@ -246,18 +251,18 @@ class TreeRPOTrainer(Trainer):
 
         # 3) reset cache → reload → reset cache
         try:
-            _run_coro_blocking(client.reset_prefix_cache())
+            run_async(client.reset_prefix_cache())
         except Exception:
             pass
 
         try:
-            _run_coro_blocking(client.collective_rpc("load_model"))
+            run_async(client.collective_rpc("load_model"))
         except Exception as e:
             # If your vLLM build uses a different opcode (e.g., "reload_model"), adapt here.
             raise e
 
         try:
-            _run_coro_blocking(client.reset_prefix_cache())
+            run_async(client.reset_prefix_cache())
         except Exception:
             pass
 
@@ -327,7 +332,7 @@ class TreeRPOTrainer(Trainer):
         answers = [ex["final_answer"] for ex in examples]
 
         # Build trees concurrently
-        trees = _run_coro_blocking(asyncio.gather(*[
+        trees = run_async(asyncio.gather(*[
             self.tree_builder.expand_tree(p, a) for p, a in zip(problems, answers)
         ]))
 
