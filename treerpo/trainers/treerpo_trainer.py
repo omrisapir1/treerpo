@@ -283,26 +283,26 @@ class TreeRPOTrainer(Trainer):
         return features
 
     def _extract_batch_examples(self, inputs: Union[Dict[str, Any], List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        """Normalize a Trainer batch into a list of {'question','final_answer'} dicts."""
+        """Normalize a Trainer batch into a list of {'problem','final_answer'} dicts."""
         if isinstance(inputs, list):
             return inputs  # already list of examples
         if not isinstance(inputs, dict):
             raise TypeError(f"Unexpected batch type: {type(inputs)}")
 
         # Common case: dict of columns -> lists
-        questions = inputs.get("question", None)
+        problems = inputs.get("problem", None)
         answers = inputs.get("final_answer", None)
-        if questions is None or answers is None:
-            raise KeyError("Batch must contain 'question' and 'final_answer' fields.")
+        if problems is None or answers is None:
+            raise KeyError("Batch must contain 'problem' and 'final_answer' fields.")
 
         # If tensors slipped in, convert to list of python objects
-        if torch.is_tensor(questions):
-            questions = [q for q in questions]
+        if torch.is_tensor(problems):
+            problems = [q for q in problems]
         if torch.is_tensor(answers):
             answers = [a for a in answers]
 
         # Ensure strings
-        return [{"question": str(q), "final_answer": str(a)} for q, a in zip(questions, answers)]
+        return [{"problem": str(q), "final_answer": str(a)} for q, a in zip(problems, answers)]
 
     def _count_leaves(self, root) -> int:
         """Count leaves (nodes with no children) from a TreeNode root."""
@@ -320,7 +320,7 @@ class TreeRPOTrainer(Trainer):
         """Build a tree for each prompt in the batch and convert to sibling groups."""
         mode = "eval" if self.control.should_evaluate else "train"
         examples = self._extract_batch_examples(inputs)
-        problems = [ex["question"] for ex in examples]
+        problems = [ex["problem"] for ex in examples]
         answers = [ex["final_answer"] for ex in examples]
 
         # Build trees concurrently
