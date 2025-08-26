@@ -113,6 +113,7 @@ class TreeRPOTrainer(Trainer):
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         callbacks: Optional[list] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        data_collator=None,  # Add data_collator parameter
     ):
         if args is None:
             raise ValueError("TreeRPOConfig is required")
@@ -154,12 +155,17 @@ class TreeRPOTrainer(Trainer):
             "eval": defaultdict(list),
         }
 
+        # Custom data collator for TreeRPO that just passes through the raw data
+        if data_collator is None:
+            data_collator = self._default_data_collator
+
         super().__init__(
             model=model,
             args=args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             tokenizer=tokenizer,
+            data_collator=data_collator,  # Pass the data collator
             callbacks=callbacks,
             optimizers=optimizers,
         )
@@ -255,6 +261,26 @@ class TreeRPOTrainer(Trainer):
         torch.cuda.empty_cache()
 
     # -------------------- data → trees --------------------------- #
+
+    def _default_data_collator(self, features):
+        """
+        Custom data collator for TreeRPO that handles raw text data.
+        Just passes through the batch as-is since TreeRPO processes raw text.
+        """
+        if not features:
+            return {}
+
+        # If it's a list of dicts, convert to dict of lists
+        if isinstance(features, list) and len(features) > 0:
+            if isinstance(features[0], dict):
+                # Convert list of dicts to dict of lists
+                batch = {}
+                for key in features[0].keys():
+                    batch[key] = [f[key] for f in features]
+                return batch
+
+        # If it's already in the right format, return as-is
+        return features
 
     def _extract_batch_examples(self, inputs: Union[Dict[str, Any], List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """Normalize a Trainer batch into a list of {'question','final_answer'} dicts."""
