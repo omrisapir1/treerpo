@@ -126,7 +126,6 @@ class TreeRPOTrainer(Trainer):
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 **model_init_kwargs,
-                trust_remote_code=args.trust_remote_code,
             )
         else:
             model_id = getattr(model.config, "_name_or_path", "unknown-model")
