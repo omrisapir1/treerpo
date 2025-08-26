@@ -5,9 +5,9 @@ from typing import Optional
 
 import torch
 
-from .config import TreeRPOConfig
-from .trainers.treerpo_trainer import TreeRPOTrainer
-from .eval.gsm8k import evaluate_gsm8k
+from config import TreeRPOConfig
+from trainers.treerpo_trainer import TreeRPOTrainer
+from eval.gsm8k import evaluate_gsm8k
 
 
 # ------------------------------- helpers ---------------------------------
