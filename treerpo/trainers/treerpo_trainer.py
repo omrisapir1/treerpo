@@ -75,16 +75,7 @@ def _run_coro_blocking(coro):
         return fut.result()
     else:
         # If no event loop is running, create a new one
-        # Handle both coroutines and futures
-        import inspect
-        if hasattr(coro, '__await__') or inspect.iscoroutine(coro):
-            return asyncio.run(coro)
-        elif hasattr(coro, 'result'):
-            # It's already a future, just get the result
-            return coro.result()
-        else:
-            # Try to run it anyway
-            return asyncio.run(coro)
+        return asyncio.run(coro)
 
 
 def _find_vllm_client(engine: AsyncLLMEngine):
