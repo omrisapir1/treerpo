@@ -65,7 +65,7 @@ def main():
     parser.add_argument("--epsilon", type=float, default=0.2, help="Clipping epsilon")
 
     # --- vLLM Engine ---
-    parser.add_argument("--gpu_memory_utilization", type=float, default=0.25)
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.3)
     parser.add_argument("--enable_prefix_caching", action="store_true")
 
     # --- Tree Parameters ---
