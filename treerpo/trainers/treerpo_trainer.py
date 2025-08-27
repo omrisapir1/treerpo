@@ -218,9 +218,6 @@ class TreeRPOTrainer(Trainer):
             tokenizer=self.tokenizer,
             cfg=args,  # TreeRPOConfig
         )
-        from collections import Counter
-        dtype_counts = Counter(param.dtype for param in self.model.parameters())
-        print(dtype_counts)
 
     # -------------------- core loop overrides -------------------- #
 
@@ -270,7 +267,6 @@ class TreeRPOTrainer(Trainer):
             pass
 
         torch.cuda.empty_cache()
-
 
     # -------------------- data → trees --------------------------- #
 
@@ -459,25 +455,23 @@ class TreeRPOTrainer(Trainer):
         return loss
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Any], num_items_in_batch=None) -> torch.Tensor:
+        """Build trees for the batch, compute group losses, mean over all groups."""
         model.train()
-        batch_groups = self._prepare_inputs(inputs)
+        batch_groups: List[List[Dict[str, torch.Tensor]]] = self._prepare_inputs(inputs)
 
-        prompt_losses = []
+        group_losses: List[torch.Tensor] = []
         for groups in batch_groups:
             if not groups:
                 continue
-            losses = []
+            # Option: scale per-prompt; we keep equal weighting across groups
             for g in groups:
-                loss_g = self._compute_loss_for_group(model, g)
-                losses.append(loss_g)
-            loss_prompt = torch.stack(losses).mean()
-            self.accelerator.backward(loss_prompt)
-            prompt_losses.append(loss_prompt.detach())
-            # free
-            del losses
+                loss = self._compute_loss_for_group(model, g)
+                self.accelerator.backward(loss)
+                group_losses.append(loss.detach())
 
-        return (torch.stack(prompt_losses).mean()
-                if prompt_losses else torch.zeros(1, device=self.accelerator.device))
+        return (torch.stack(group_losses).mean()
+                if group_losses
+                else torch.zeros(1, device=self.accelerator.device))
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Not used; we override training_step. Keep for eval compatibility if needed.
