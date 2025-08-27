@@ -45,7 +45,7 @@ def main():
                        help="Limit training samples for quick runs")
 
     # --- Training Args ---
-    parser.add_argument("--per_device_train_batch_size", type=int, default=16)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-6)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
