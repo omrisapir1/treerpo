@@ -475,6 +475,7 @@ class TreeRPOTrainer(Trainer):
                     self.accelerator.backward(loss)
                 except:
                     print(g)
+                    self.tokenizer.decode(g["completion_ids"].cpu()[0].numpy())
                     raise
                 group_losses.append(loss.detach())
 
