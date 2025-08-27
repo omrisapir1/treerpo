@@ -397,22 +397,30 @@ class TreeRPOTrainer(Trainer):
 
     def _get_per_token_logps(self, model, input_ids, attention_mask, completion_len: int):
         """
-        Compute per-token log-probs for the *completion* span only.
+        Return log p(target_token) only for the completion span [B, C],
+        without allocating [B, C, V].
         """
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-        logits = outputs.logits  # [B, T, V]
+        # Try the efficient path first (many Qwen/Llama builds support this)
+        try:
+            out = model(input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        logits_to_keep=completion_len + 1)  # keep only the tail (shifted)
+            logits = out.logits[:, :-1, :]  # [B, C, V]
+            targets = input_ids[:, -completion_len:]  # [B, C]
+        except TypeError:
+            # Fallback: full forward, then slice tail
+            out = model(input_ids=input_ids, attention_mask=attention_mask)
+            logits = out.logits[:, -completion_len - 1:-1, :]  # [B, C, V]
+            targets = input_ids[:, -completion_len:]  # [B, C]
 
-        # standard next-token shift
-        logits = logits[:, :-1, :]                 # [B, T-1, V]
-        targets = input_ids[:, 1:]                 # [B, T-1]
-
-        # slice to the last `completion_len` positions
-        comp_logits = logits[:, -completion_len:, :]         # [B, C, V]
-        comp_targets = targets[:, -completion_len:]          # [B, C]
-
-        log_probs = torch.log_softmax(comp_logits, dim=-1)   # [B, C, V]
-        per_token_logps = log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)  # [B, C]
-        return per_token_logps
+        # selective log-softmax (no [B,C,V] log_probs tensor)
+        # log p(y) = logits[y] - logsumexp(logits)
+        # keeps only [B,C] live
+        max_logits = logits.max(dim=-1, keepdim=True).values
+        logits_ = logits - max_logits
+        lse = torch.logsumexp(logits_, dim=-1)  # [B, C]
+        tgt = logits_.gather(-1, targets.unsqueeze(-1)).squeeze(-1)  # [B, C]
+        return tgt - lse  # [B, C]
 
     def _compute_loss_for_group(self, model, group: Dict[str, torch.Tensor]) -> torch.Tensor:
         prompt_ids, prompt_mask = group["prompt_ids"], group["prompt_mask"]
