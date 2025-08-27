@@ -218,6 +218,9 @@ class TreeRPOTrainer(Trainer):
             tokenizer=self.tokenizer,
             cfg=args,  # TreeRPOConfig
         )
+        from collections import Counter
+        dtype_counts = Counter(param.dtype for param in self.model.parameters())
+        print(dtype_counts)
 
     # -------------------- core loop overrides -------------------- #
 
@@ -267,9 +270,7 @@ class TreeRPOTrainer(Trainer):
             pass
 
         torch.cuda.empty_cache()
-        from collections import Counter
-        dtype_counts = Counter(param.dtype for param in self.model.parameters())
-        print(dtype_counts)
+
 
     # -------------------- data → trees --------------------------- #
 
