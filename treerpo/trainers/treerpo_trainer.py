@@ -434,6 +434,7 @@ class TreeRPOTrainer(Trainer):
                     )
                 except:
                     print(input_ids[i:i+1].size())
+                    print(self.tokenizer.decode(input_ids[i:i+1].numpy()))
                     raise
                 chunks.append(lp)
             per_token_logps = torch.cat(chunks, dim=0)
@@ -474,7 +475,7 @@ class TreeRPOTrainer(Trainer):
                     self.accelerator.backward(loss)
                 except:
                     print(g)
-                    raise 
+                    raise
                 group_losses.append(loss.detach())
 
         return (torch.stack(group_losses).mean()
