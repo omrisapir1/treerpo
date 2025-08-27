@@ -428,9 +428,13 @@ class TreeRPOTrainer(Trainer):
         if total_elems > self.max_elements_per_forward:
             chunks = []
             for i in range(input_ids.size(0)):
-                lp = self._get_per_token_logps(
-                    model, input_ids[i:i+1], attention_mask[i:i+1], completion_len
-                )
+                try:
+                    lp = self._get_per_token_logps(
+                        model, input_ids[i:i+1], attention_mask[i:i+1], completion_len
+                    )
+                except:
+                    print(input_ids[i:i+1].size())
+                    raise
                 chunks.append(lp)
             per_token_logps = torch.cat(chunks, dim=0)
         else:
