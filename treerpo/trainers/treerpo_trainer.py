@@ -432,6 +432,8 @@ class TreeRPOTrainer(Trainer):
                     model, input_ids[i:i+1], attention_mask[i:i+1], completion_len
                 )
                 chunks.append(lp)
+                del lp
+                torch.cuda.empty_cache()
             per_token_logps = torch.cat(chunks, dim=0)
         else:
             per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, completion_len)
