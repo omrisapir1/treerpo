@@ -470,7 +470,11 @@ class TreeRPOTrainer(Trainer):
             # Option: scale per-prompt; we keep equal weighting across groups
             for g in groups:
                 loss = self._compute_loss_for_group(model, g)
-                self.accelerator.backward(loss)
+                try:
+                    self.accelerator.backward(loss)
+                except:
+                    print(g)
+                    raise 
                 group_losses.append(loss.detach())
 
         return (torch.stack(group_losses).mean()
