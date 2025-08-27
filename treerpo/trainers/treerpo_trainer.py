@@ -434,7 +434,7 @@ class TreeRPOTrainer(Trainer):
                     )
                 except:
                     print(input_ids[i:i+1].size())
-                    print(self.tokenizer.decode(input_ids[i:i+1].cpu().numpy()))
+                    print(self.tokenizer.decode(input_ids[i:i+1].cpu()[0].numpy()))
                     raise
                 chunks.append(lp)
             per_token_logps = torch.cat(chunks, dim=0)
