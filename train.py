@@ -74,7 +74,7 @@ def main():
     parser.add_argument("--entropy_threshold", type=float, default=1.0)
     parser.add_argument("--entropy_top_k", type=int, default=20)
     parser.add_argument("--coverage_min_chars", type=int, default=150)
-    parser.add_argument("--coverage_children_max", type=int, default=4)
+    parser.add_argument("--coverage_children_max", type=int, default=2)
 
     # --- Generation Parameters ---
     parser.add_argument("--temperature", type=float, default=0.6)
