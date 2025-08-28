@@ -171,7 +171,7 @@ class TreeBuilder:
 
                 outs = chunk.outputs[0]
                 total_tokens = len(outs.token_ids)
-                if total_tokens + n_tokens_generated < self.cfg.max_full_answer_length:
+                if total_tokens + n_tokens_generated > self.cfg.max_full_answer_length:
                     break
 
                 # Skip if we don't have enough tokens yet (except for root)
