@@ -293,6 +293,7 @@ class TreeBuilder:
                         )
                         node.add_child(child)
                         n_tokens_generated += len(truncated_ids)
+                        print(f'n_tokens_generated: {n_tokens_generated}')
                         self._schedule_child(child, final_answer=final_answer, coverage_mode=True,n_tokens_generated=n_tokens_generated, tasks=tasks)
 
                     return
