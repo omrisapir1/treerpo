@@ -166,13 +166,15 @@ class TreeBuilder:
             at_splitable_token = False
 
             async for chunk in self.engine.generate(prompt_text, params, request_id=str(uuid.uuid4())):
+                total_tokens = len(outs.token_ids)
+                if total_tokens + n_tokens_generated > self.cfg.max_full_answer_length:
+                    break
                 if coverage_mode:
                     continue  # Skip splitting logic in coverage mode
 
                 outs = chunk.outputs[0]
-                total_tokens = len(outs.token_ids)
-                if total_tokens + n_tokens_generated > self.cfg.max_full_answer_length:
-                    break
+
+
 
                 # Skip if we don't have enough tokens yet (except for root)
                 if node.depth > 0 and total_tokens < self.cfg.min_segment_len:
