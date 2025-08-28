@@ -244,7 +244,7 @@ class TreeBuilder:
                                 parent=node
                             )
                             node.add_child(child)
-                            n_tokens_generated += len(out_tokens)
+                            n_tokens_generated += total_tokens
                             self._schedule_child(child, final_answer=final_answer, coverage_mode=False, n_tokens_generated=n_tokens_generated, tasks=tasks)
 
                         return  # Stop this generation stream
@@ -290,8 +290,8 @@ class TreeBuilder:
                             parent=node
                         )
                         node.add_child(child)
-                        n_tokens_generated += len(out_tokens)
-                        self._schedule_child(child, final_answer=final_answer, coverage_mode=True,n_tokens_generated=n_tokens_generated + len(out_tokens), tasks=tasks)
+                        n_tokens_generated += total_tokens
+                        self._schedule_child(child, final_answer=final_answer, coverage_mode=True,n_tokens_generated=n_tokens_generated, tasks=tasks)
 
                     return
 
