@@ -58,6 +58,10 @@ class TreeRPOConfig(TrainingArguments):
         default=1300,
         metadata={"help": "Per-node max new tokens during generation (tree expansion)."},
     )
+    max_full_answer_length: int = field(
+        default=2600,
+        metadata={"help": "Max total tokens during generation per answer."},
+    )
     cache_implementation: Optional[str] = field(
         default=None,
         metadata={"help": "HF cache implementation if vLLM is disabled."},

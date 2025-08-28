@@ -139,6 +139,7 @@ class TreeBuilder:
         *,
         final_answer: str,
         coverage_mode: bool,
+        n_tokens_generated: int = 0,
         tasks: list[asyncio.Task],
     ) -> None:
         """
@@ -155,7 +156,7 @@ class TreeBuilder:
                 top_p=self.cfg.top_p,
                 top_k=self.cfg.top_k,
                 repetition_penalty=self.cfg.repetition_penalty,
-                max_tokens=self.cfg.max_completion_length,
+                max_tokens=min(self.cfg.max_full_answer_length - n_tokens_generated, self.cfg.max_completion_length) ,
                 logprobs=self.cfg.entropy_top_k,
             )
 
@@ -243,7 +244,8 @@ class TreeBuilder:
                                 parent=node
                             )
                             node.add_child(child)
-                            self._schedule_child(child, final_answer=final_answer, coverage_mode=False, tasks=tasks)
+                            n_tokens_generated += len(out_tokens)
+                            self._schedule_child(child, final_answer=final_answer, coverage_mode=False, n_tokens_generated=n_tokens_generated, tasks=tasks)
 
                         return  # Stop this generation stream
 
@@ -288,7 +290,8 @@ class TreeBuilder:
                             parent=node
                         )
                         node.add_child(child)
-                        self._schedule_child(child, final_answer=final_answer, coverage_mode=True, tasks=tasks)
+                        n_tokens_generated += len(out_tokens)
+                        self._schedule_child(child, final_answer=final_answer, coverage_mode=True,n_tokens_generated=n_tokens_generated + len(out_tokens), tasks=tasks)
 
                     return
 
@@ -340,10 +343,10 @@ class TreeBuilder:
         return split_point != -1 and split_point >= self.cfg.min_segment_len
 
     # ---------------------------- Scheduling ----------------------------
-    def _schedule_child(self, child: TreeNode, *, final_answer: str, coverage_mode: bool, tasks: list[asyncio.Task]) -> None:
+    def _schedule_child(self, child: TreeNode, *, final_answer: str, coverage_mode: bool, n_tokens_generated:int, tasks: list[asyncio.Task]) -> None:
         """Schedule a child node for asynchronous generation."""
         tasks.append(asyncio.create_task(
-            self._spawn_node(child, final_answer=final_answer, coverage_mode=coverage_mode, tasks=tasks)
+            self._spawn_node(child, final_answer=final_answer, coverage_mode=coverage_mode, n_tokens_generated=n_tokens_generated, tasks=tasks)
         ))
 
     # ---------------------------- Termination & scoring -----------------

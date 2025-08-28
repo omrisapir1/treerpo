@@ -82,6 +82,8 @@ def main():
     parser.add_argument("--top_k", type=int, default=25)
     parser.add_argument("--repetition_penalty", type=float, default=1.1)
     parser.add_argument("--max_completion_length", type=int, default=1300)
+    parser.add_argument("--max_full_answer_length", type=int, default=2600)
+
 
     args = parser.parse_args()
 
@@ -138,6 +140,7 @@ def main():
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
         max_completion_length=args.max_completion_length,
+        max_full_answer_length=args.max_full_answer_length,
     )
 
     # Create trainer
