@@ -171,6 +171,8 @@ class TreeBuilder:
 
                 outs = chunk.outputs[0]
                 total_tokens = len(outs.token_ids)
+                if total_tokens + n_tokens_generated < self.cfg.max_full_answer_length:
+                    break
 
                 # Skip if we don't have enough tokens yet (except for root)
                 if node.depth > 0 and total_tokens < self.cfg.min_segment_len:
@@ -281,7 +283,7 @@ class TreeBuilder:
 
                     # Create coverage children
                     next_prompt_ids = node.prompt_ids + node.completion_ids
-                    num_coverage_children = getattr(self.cfg, 'coverage_children_max', 4)
+                    num_coverage_children = getattr(self.cfg, 'coverage_children_max', 2)
 
                     for _ in range(num_coverage_children):
                         child = TreeNode(
@@ -290,7 +292,7 @@ class TreeBuilder:
                             parent=node
                         )
                         node.add_child(child)
-                        n_tokens_generated += total_tokens
+                        n_tokens_generated += len(truncated_ids)
                         self._schedule_child(child, final_answer=final_answer, coverage_mode=True,n_tokens_generated=n_tokens_generated, tasks=tasks)
 
                     return
