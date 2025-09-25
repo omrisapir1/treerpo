@@ -135,8 +135,6 @@ def evaluate_gsm8k(
         temperature=majk_temperature,
         top_p=majk_top_p,
         max_tokens=majk_max_new_tokens,
-        top_k=None,
-        repetition_penalty=None,
     )
 
     majk_correct = 0
