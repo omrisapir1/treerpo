@@ -421,9 +421,14 @@ class TreeRPOTrainer(Trainer):
         chunks = []
         for i in range(input_ids.size(0)):
             try:
+                row_input_ids = input_ids[i:i + 1].to(model.device)
+                row_attention_mask = attention_mask[i:i + 1].to(model.device)
                 lp = self._get_per_token_logps(
-                    model, (input_ids[i:i+1]).to(model.device), (attention_mask[i:i+1]).to(model.device), completion_len
+                    model, row_input_ids, row_attention_mask, completion_len
                 )
+                del row_input_ids, row_attention_mask
+                torch.cuda.empty_cache()
+
                 chunks.append(lp)
             except:
                 print('input_ids.shape', input_ids.shape)
@@ -432,8 +437,6 @@ class TreeRPOTrainer(Trainer):
 
         per_token_logps = torch.cat(chunks, dim=0)
 
-
-        # clipped surrogate (no KL by default)
         advantages = group["advantages"].to(model.device)
         old_per_token_logps = group["old_per_token_logps"] or per_token_logps.detach()
         log_ratio = (per_token_logps - old_per_token_logps).clamp(-60, 60)
