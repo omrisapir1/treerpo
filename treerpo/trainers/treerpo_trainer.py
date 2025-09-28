@@ -152,7 +152,6 @@ class TreeRPOTrainer(Trainer):
         self.beta = args.beta
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
-        self.max_elements_per_forward = args.max_elements_per_forward
 
         # Metrics store
         self._metrics: Dict[str, Dict[str, List[float]]] = {
@@ -414,27 +413,25 @@ class TreeRPOTrainer(Trainer):
         completion_ids, completion_mask = group["completion_ids"], group["completion_mask"]
 
         # concat to form full inputs
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1).to(model.device)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1).to(model.device)
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         completion_len = completion_ids.size(1)
 
-        # row-wise fallback to avoid OOM
-        total_elems = input_ids.shape[0] * input_ids.shape[1]
-        if total_elems > self.max_elements_per_forward:
-            chunks = []
-            for i in range(input_ids.size(0)):
-                try:
-                    lp = self._get_per_token_logps(
-                        model, input_ids[i:i+1], attention_mask[i:i+1], completion_len
-                    )
-                except:
-                    print('input_ids.shape', input_ids.shape)
-                    print('OOM will skip this batch 1')
-                    raise
+
+        chunks = []
+        for i in range(input_ids.size(0)):
+            try:
+                lp = self._get_per_token_logps(
+                    model, (input_ids[i:i+1]).to(model.device), (attention_mask[i:i+1]).to(model.device), completion_len
+                )
                 chunks.append(lp)
-            per_token_logps = torch.cat(chunks, dim=0)
-        else:
-            per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, completion_len)
+            except:
+                print('input_ids.shape', input_ids.shape)
+                print('OOM will skip this batch 1')
+                raise
+
+        per_token_logps = torch.cat(chunks, dim=0)
+
 
         # clipped surrogate (no KL by default)
         advantages = group["advantages"].to(model.device)

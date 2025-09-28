@@ -148,15 +148,6 @@ class TreeRPOConfig(TrainingArguments):
         metadata={"help": "Upper clipping epsilon. If None, equals `epsilon`."},
     )
 
-    # ---------------- Compute safeguards ----------------
-    max_elements_per_forward: int = field(
-        default=1200,
-        metadata={
-            "help": "If B*L exceeds this threshold, compute per-row to reduce memory (avoid OOM)."
-        },
-    )
-
-    # ---------------- Minimal logging ----------------
     log_tree_stats: bool = field(
         default=True,
         metadata={"help": "Log simple tree stats (e.g., avg leaves per prompt)."},
