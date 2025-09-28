@@ -20,13 +20,9 @@ from vllm.engine.async_llm_engine import AsyncLLMEngine
 from treerpo import TreeRPOConfig
 from treerpo.tree_builder.entropy_tree import TreeBuilder
 
-# If you plan to run in notebooks, install nest_asyncio once:
-# pip install nest_asyncio
 import nest_asyncio
 nest_asyncio.apply()
 
-
-# ------------------------------ utilities ------------------------------ #
 
 def set_seed_all(seed: int):
     # keep: minimal, device-specific
@@ -219,7 +215,6 @@ class TreeRPOTrainer(Trainer):
             cfg=args,  # TreeRPOConfig
         )
 
-    # -------------------- core loop overrides -------------------- #
 
     def optimizer_step(
         self,
@@ -303,14 +298,6 @@ class TreeRPOTrainer(Trainer):
         if problems is None or answers is None:
             raise KeyError("Batch must contain 'problem' and 'final_answer' fields.")
 
-        # If tensors slipped in, convert to list of python objects
-        if torch.is_tensor(problems):
-            problems = [q for q in problems]
-        if torch.is_tensor(answers):
-            answers = [a for a in answers]
-
-        # Ensure strings
-        return [{"problem": str(q), "final_answer": str(a)} for q, a in zip(problems, answers)]
 
     def _count_leaves(self, root) -> int:
         """Count leaves (nodes with no children) from a TreeNode root."""
@@ -393,7 +380,7 @@ class TreeRPOTrainer(Trainer):
         process_node(tree_root)
         return groups
 
-    # -------------------- losses --------------------------- #
+
 
     def _get_per_token_logps(self, model, input_ids, attention_mask, completion_len: int):
         """
@@ -433,29 +420,25 @@ class TreeRPOTrainer(Trainer):
                         model, input_ids[i:i+1], attention_mask[i:i+1], completion_len
                     )
                 except:
-                    print(input_ids[i:i+1].size())
-                    print(self.tokenizer.decode(input_ids[i:i+1].cpu()[0].numpy()))
-                    raise
+                    print('OOM will skip this batch')
                 chunks.append(lp)
             per_token_logps = torch.cat(chunks, dim=0)
         else:
             per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, completion_len)
 
         # clipped surrogate (no KL by default)
-        advantages = group["advantages"].to(model.device)                       # [B]
+        advantages = group["advantages"].to(model.device)
         old_per_token_logps = group["old_per_token_logps"] or per_token_logps.detach()
-        log_ratio = (per_token_logps - old_per_token_logps).clamp(-60, 60)     # [B, C]
+        log_ratio = (per_token_logps - old_per_token_logps).clamp(-60, 60)
         ratio = torch.exp(log_ratio)
         ratio_clipped = torch.clamp(ratio, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
-        # broadcast advantages to token level
-        adv = advantages.unsqueeze(1)                                           # [B, 1]
+        adv = advantages.unsqueeze(1)
         loss1 = ratio * adv
         loss2 = ratio_clipped * adv
-        per_token_loss = -torch.min(loss1, loss2)                               # [B, C]
+        per_token_loss = -torch.min(loss1, loss2)
 
-        # mask and average over completion tokens
-        cmask = completion_mask.to(model.device)                                # [B, C]
+        cmask = completion_mask.to(model.device)
         loss = (per_token_loss * cmask).sum() / cmask.sum().clamp_min(1)
         return loss
 
@@ -474,9 +457,7 @@ class TreeRPOTrainer(Trainer):
                 try:
                     self.accelerator.backward(loss)
                 except:
-                    print(g)
-                    print(self.tokenizer.decode(g["completion_ids"].cpu()[0].numpy()))
-                    raise
+                    print('OOM will skip this batch')
                 group_losses.append(loss.detach())
 
         return (torch.stack(group_losses).mean()

@@ -1,6 +1,4 @@
 import asyncio
-import json
-import os
 import random
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -15,9 +13,6 @@ from treerpo.utils.prompts import build_prompt_ids
 from treerpo.config import TreeRPOConfig as TreeConfig
 
 
-# ----------------------------------------------------------------------
-# Data structures
-# ----------------------------------------------------------------------
 class NodeState(Enum):
     EXPLORING = auto()
     TERMINAL = auto()
@@ -25,22 +20,17 @@ class NodeState(Enum):
 
 @dataclass
 class TreeNode:
-    # Context up to this node (prompt IDs)
     prompt_ids: List[int]
 
-    # Hierarchy
     depth: int = 0
     parent: Optional["TreeNode"] = None
     children: List["TreeNode"] = field(default_factory=list)
 
-    # Local "thought span" (this node's continuation)
     completion_ids: List[int] = field(default_factory=list)
 
-    # Text caches (filled on finalize)
     prompt_text: str = ""
     completion_text: str = ""
 
-    # Bookkeeping
     state: NodeState = NodeState.EXPLORING
     reward: Optional[float] = None                 # leaf: {0,1}; interior: mean of descendants
     rewards_accum: List[float] = field(default_factory=list)  # descendant leaf rewards
@@ -77,9 +67,6 @@ class TreeNode:
         }
 
 
-# ----------------------------------------------------------------------
-# Main builder
-# ----------------------------------------------------------------------
 class TreeBuilder:
     def __init__(self, engine: AsyncLLMEngine, tokenizer: AutoTokenizer, cfg: TreeConfig) -> None:
         self.engine = engine
@@ -87,7 +74,6 @@ class TreeBuilder:
         self.cfg = cfg
         self.sem = asyncio.Semaphore(cfg.max_async_streams)
 
-        # Seeding (best effort; vLLM may have its own RNG)
         if cfg.seed is not None:
             random.seed(cfg.seed)
             np.random.seed(cfg.seed)
@@ -97,42 +83,25 @@ class TreeBuilder:
         """Build a full reasoning tree for a single prompt."""
         root = TreeNode(prompt_ids=build_prompt_ids(self.tok, problem), depth=0, parent=None)
 
-        # Start with the root node - the unified _spawn_node handles the forced first split
         tasks: list[asyncio.Task] = []
         await self._spawn_node(root, final_answer=final_answer, coverage_mode=False, tasks=tasks)
 
-        # Wait for all spawned tasks (matching original ToE logic)
         if tasks:
             await asyncio.gather(*tasks)
 
             while True:
-                # Keep only tasks that are not finished yet
                 pending = [t for t in tasks if not t.done()]
                 if not pending:
                     break
-                # Await the current batch; new tasks may be appended meanwhile
                 await asyncio.gather(*pending)
 
-        # Reward propagation: leaves already have reward; push up then set interior means
         for n in self._collect_nodes(root):
             if n.state is NodeState.TERMINAL:
                 n.propagate_reward_up(n.reward or 0.0)
         for n in self._collect_nodes(root):
             n.finalize_interior_reward()
 
-        js = root.to_dict()
-        js['final_answer'] = final_answer
-        path = '/workspace/data'
-        if not os.path.exists(path):
-            os.mkdir(path)
-        import time
-        json.dump( js, open(os.path.join(path, f"{time.time()}.json"),'w'))
 
-
-        return root
-
-
-    # ---------------------------- Node growth ---------------------------
     async def _spawn_node(
         self,
         node: TreeNode,
@@ -150,7 +119,6 @@ class TreeBuilder:
             from vllm import SamplingParams
             import uuid
 
-            # Set up sampling parameters
             params = SamplingParams(
                 temperature=self.cfg.temperature,
                 top_p=self.cfg.top_p,
@@ -160,7 +128,6 @@ class TreeBuilder:
                 logprobs=self.cfg.entropy_top_k,
             )
 
-            # Generate text for this node
             prompt_text = self.tok.decode(node.prompt_ids)
             token_counter = 0
             at_splitable_token = False
@@ -183,17 +150,13 @@ class TreeBuilder:
                     out_tokens = outs.token_ids[:token_index + 1]
                     out_text = self.tok.decode(out_tokens)
 
-                    # For depth 0: split immediately on first token (no conditions)
-                    # For depth > 0: check entropy and other conditions
+                    # For depth 0: split immediately on first token (no conditions); depth > 0: check entropy and other conditions
                     top_candidates= {tid: -99 if np.isinf(e.logprob) else e.logprob for tid, e in
                            outs.logprobs[token_index].items()} if outs.logprobs else {}
                     if node.depth == 0:
                         should_split = True
                     else:
-                        # Calculate entropy from logprobs (only for non-root splits)
                         entropy = self._entropy_from_topk_logprobs(top_candidates)
-
-                        # Entropy-based split conditions
                         should_split = (
                             entropy > self.cfg.entropy_threshold and
                             node.depth < self.cfg.max_depth and
@@ -209,21 +172,12 @@ class TreeBuilder:
 
                     # UNIFIED SPLITTING DECISION: entropy-based OR forced first split
                     if should_split:
-                        # Update this node with completion up to the split point
                         take_from_prompt = (node.depth != 0)
                         last_token_id = self._update_node_with_output(
                             node, out_tokens, take_from_prompt, remove_last_token=True
                         )
 
-
-                        # Prepare next prompt for children
                         next_prompt_ids = node.prompt_ids + node.completion_ids
-
-                        # Get alternative tokens for diversification (matching original ToE.py exactly)
-                        # if outs.logprobs and token_index in outs.logprobs:
-                            # Preprocess logprobs like original ToE.py
-
-                            # Get candidates excluding the original token (matching original ToE.py)
                         cand_items = [(t, lp) for t, lp in top_candidates.items() if t != last_token_id]
 
 
@@ -234,10 +188,7 @@ class TreeBuilder:
                             alt_token_id = int(np.random.choice(cand_ids, p=probs))
                         else:
                             alt_token_id = last_token_id  # Fallback
-                        # else:
-                        #     alt_token_id = last_token_id  # Fallback
 
-                        # Create two children: original + alternative (matching original ToE.py)
                         for forced_token in (last_token_id, alt_token_id):
 
                             child = TreeNode(
@@ -291,13 +242,9 @@ class TreeBuilder:
                             parent=node
                         )
                         node.add_child(child)
-                        print(f'n_tokens_generated: {n_tokens_generated}')
-                        print(f'len(truncated_ids) {len(truncated_ids)}')
                         self._schedule_child(child, final_answer=final_answer, coverage_mode=True,n_tokens_generated=n_tokens_generated + len(truncated_ids), tasks=tasks)
-
                     return
 
-            # TERMINAL LEAF: finalize this node
             take_from_prompt = (node.depth != 0) if not coverage_mode else False
             self._update_node_with_output(
                 node, final_output.token_ids, take_from_prompt, remove_last_token=False
@@ -333,25 +280,21 @@ class TreeBuilder:
         if not outs or not outs.text:
             return False
 
-        # Check if the generated text is longer than the coverage threshold
         text_length = len(outs.text)
         if text_length <= self.cfg.coverage_min_chars:
             return False
 
-        # Look for a natural split point (delimiter) before the minimum coverage threshold
         split_point = self._last_delimiter_before(outs.text, text_length - self.cfg.coverage_min_chars)
-
-        # Only split if we found a delimiter and it's far enough from the start
         return split_point != -1 and split_point >= self.cfg.min_segment_len
 
-    # ---------------------------- Scheduling ----------------------------
+
     def _schedule_child(self, child: TreeNode, *, final_answer: str, coverage_mode: bool, n_tokens_generated:int, tasks: list[asyncio.Task]) -> None:
         """Schedule a child node for asynchronous generation."""
         tasks.append(asyncio.create_task(
             self._spawn_node(child, final_answer=final_answer, coverage_mode=coverage_mode, n_tokens_generated=n_tokens_generated, tasks=tasks)
         ))
 
-    # ---------------------------- Termination & scoring -----------------
+
     def _finalize_leaf(self, node: TreeNode) -> None:
         """Mark a node as terminal and decode its text."""
         node.state = NodeState.TERMINAL
@@ -366,7 +309,7 @@ class TreeBuilder:
         except Exception:
             return 0.0
 
-    # ---------------------------- Predicates & utilities ----------------
+
     def _segment_long_enough(self, node: TreeNode) -> bool:
         """Check if the current completion segment is long enough to split."""
         return len(node.completion_ids) >= self.cfg.min_segment_len
