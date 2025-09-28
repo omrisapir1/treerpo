@@ -133,6 +133,7 @@ class TreeRPOTrainer(Trainer):
             )
         else:
             model_id = getattr(model.config, "_name_or_path", "unknown-model")
+        print(f'model dtype = {model.dtype}')
 
         # Required for training
         if hasattr(model, "config"):
