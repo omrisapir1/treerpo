@@ -314,7 +314,9 @@ class TreeRPOTrainer(Trainer):
     def _prepare_inputs(self, inputs: Union[Dict[str, Any], List[Dict[str, Any]]]) -> List[List[Dict[str, Any]]]:
         """Build a tree for each prompt in the batch and convert to sibling groups."""
         mode = "eval" if self.control.should_evaluate else "train"
+        print(f'This is inputs {inputs}')
         examples = self._extract_batch_examples(inputs)
+        print(f'This is examples {examples}')
         problems = [ex["problem"] for ex in examples]
         answers = [ex["final_answer"] for ex in examples]
 
