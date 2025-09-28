@@ -427,7 +427,7 @@ class TreeRPOTrainer(Trainer):
                         model, input_ids[i:i+1], attention_mask[i:i+1], completion_len
                     )
                 except:
-
+                    print('input_ids.shape', input_ids.shape)
                     print('OOM will skip this batch 1')
                     raise
                 chunks.append(lp)
