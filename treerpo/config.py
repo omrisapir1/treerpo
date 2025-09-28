@@ -122,7 +122,7 @@ class TreeRPOConfig(TrainingArguments):
         metadata={"help": "vLLM `max_num_seqs`."},
     )
     vllm_max_batched_tokens: int = field(
-        default=64 * 3000,
+        default=8 * 3000,
         metadata={"help": "vLLM `max_num_batched_tokens`."},
     )
     vllm_enable_prefix_caching: bool = field(

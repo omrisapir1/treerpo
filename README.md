@@ -35,7 +35,7 @@ pip install -e .
 Minimal command with sensible defaults (beta=0, single GPU, vLLM-backed tree expansion):
 
 ```bash
-python train.py --model_id omrisap/Qwen2.5-Math-1.5B-5K-SFT   --dataset omrisap/NuminaMath-5K-TreeRPO   --per_device_train_batch_size 16   --output_dir ./checkpoints/treerpo   --save_steps 200   --save_total_limit 2   --logging_steps 50   --gpu_memory_utilization 0.4   --enable_prefix_caching   --torch_dtype bfloat16   --max_depth 7   --min_segment_len 150   --entropy_threshold 1.0   --entropy_top_k 20   --coverage_min_chars 150   --coverage_children_max 4   --temperature 0.6   --top_p 0.85   --top_k 25   --repetition_penalty 1.1   --max_completion_length 1300
+python train.py --model_id omrisap/Qwen2.5-Math-1.5B-5K-SFT   --dataset omrisap/NuminaMath-5K-TreeRPO   --per_device_train_batch_size 16   --output_dir ./checkpoints/treerpo   --save_steps 200   --save_total_limit 2   --logging_steps 50   --gpu_memory_utilization 0.25   --enable_prefix_caching   --torch_dtype bfloat16   --max_depth 7   --min_segment_len 150   --entropy_threshold 1.0   --entropy_top_k 20   --coverage_min_chars 150   --coverage_children_max 4   --temperature 0.6   --top_p 0.85   --top_k 25   --repetition_penalty 1.1   --max_completion_length 1300
 ```
 
 ### GSM8K Evaluation
