@@ -100,7 +100,7 @@ class TreeBuilder:
                 n.propagate_reward_up(n.reward or 0.0)
         for n in self._collect_nodes(root):
             n.finalize_interior_reward()
-            
+
         return root
 
 

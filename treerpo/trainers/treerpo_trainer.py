@@ -427,7 +427,9 @@ class TreeRPOTrainer(Trainer):
                         model, input_ids[i:i+1], attention_mask[i:i+1], completion_len
                     )
                 except:
-                    print('OOM will skip this batch')
+
+                    print('OOM will skip this batch 1')
+                    raise
                 chunks.append(lp)
             per_token_logps = torch.cat(chunks, dim=0)
         else:
@@ -464,7 +466,8 @@ class TreeRPOTrainer(Trainer):
                 try:
                     self.accelerator.backward(loss)
                 except:
-                    print('OOM will skip this batch')
+                    print('OOM will skip this batch 2')
+                    raise
                 group_losses.append(loss.detach())
 
         return (torch.stack(group_losses).mean()
