@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 from collections import defaultdict
@@ -25,7 +26,7 @@ nest_asyncio.apply()
 
 
 def set_seed_all(seed: int):
-    # keep: minimal, device-specific
+
     from accelerate.utils import set_seed
     set_seed(seed, device_specific=True)
 

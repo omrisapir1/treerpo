@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-Simple training script for TreeRPO.
-Usage: python train.py --model_id <model> --dataset <dataset> --output_dir <dir>
-"""
 
 import argparse
 import torch
@@ -41,7 +36,7 @@ def main():
     # --- Data ---
     parser.add_argument("--dataset", type=str, required=True,
                        help="HF dataset id (expects 'question' & 'final_answer' columns)")
-    parser.add_argument("--max_train_samples", type=int, default=50,
+    parser.add_argument("--max_train_samples", type=int, default=5000,
                        help="Limit training samples for quick runs")
 
     # --- Training Args ---
@@ -87,7 +82,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Load dataset
     print(f"Loading dataset: {args.dataset}")
     dataset = load_dataset(args.dataset, split="train")
     if args.max_train_samples is not None:
@@ -102,7 +96,6 @@ def main():
     }
 
     config = TreeRPOConfig(
-        # Basic training args
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,

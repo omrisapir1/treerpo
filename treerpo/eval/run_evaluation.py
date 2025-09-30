@@ -1,14 +1,8 @@
-#!/usr/bin/env python3
-"""
-Simple evaluation script for GSM8K using TreeRPO models.
-Usage: python treerpo/eval/run_evaluation.py --model_id <model>
-"""
 
 import argparse
 import sys
 import os
 
-# Add the project root to path to import treerpo modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from treerpo.eval.gsm8k import evaluate_gsm8k
@@ -17,13 +11,11 @@ from treerpo.eval.gsm8k import evaluate_gsm8k
 def main():
     parser = argparse.ArgumentParser(description="Evaluate model on GSM8K")
 
-    # --- Model Settings ---
     parser.add_argument("--model_id", type=str, required=True,
                        help="HF model id or local path")
     parser.add_argument("--tokenizer_id", type=str, default=None,
                        help="Tokenizer id (defaults to model_id)")
 
-    # --- vLLM Engine Settings ---
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.4,
                        help="vLLM GPU memory utilization [0,1]")
     parser.add_argument("--dtype", type=str, default="bfloat16",
@@ -37,14 +29,11 @@ def main():
     parser.add_argument("--trust_remote_code", action="store_true",
                        help="Trust remote code when loading model")
 
-    # --- Evaluation Settings ---
     parser.add_argument("--max_samples", type=int, default=None,
                        help="Limit test samples for faster evaluation")
     parser.add_argument("--batch_size", type=int, default=64,
                        help="Batch size for inference")
 
-    # --- Decoding Settings ---
-    # Greedy
     parser.add_argument("--greedy_max_new_tokens", type=int, default=1024,
                        help="Max new tokens for greedy decoding")
 
@@ -60,14 +49,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Prepare vLLM kwargs
     llm_kwargs = {
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "dtype": args.dtype,
         "trust_remote_code": args.trust_remote_code,
     }
 
-    # Add optional parameters if specified
     if args.max_model_len is not None:
         llm_kwargs["max_model_len"] = args.max_model_len
     if args.max_num_seqs is not None:
@@ -90,7 +77,6 @@ def main():
     print("-" * 60)
 
     try:
-        # Run evaluation using the existing gsm8k.py module
         results = evaluate_gsm8k(
             model_id=args.model_id,
             tokenizer_id=args.tokenizer_id,
@@ -112,7 +98,6 @@ def main():
         print(f"Total samples:    {results['n']}")
         print("=" * 60)
 
-        # Return results for programmatic use
         return results
 
     except Exception as e:
