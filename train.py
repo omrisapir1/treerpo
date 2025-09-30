@@ -41,7 +41,7 @@ def main():
     # --- Data ---
     parser.add_argument("--dataset", type=str, required=True,
                        help="HF dataset id (expects 'question' & 'final_answer' columns)")
-    parser.add_argument("--max_train_samples", type=int, default=None,
+    parser.add_argument("--max_train_samples", type=int, default=50,
                        help="Limit training samples for quick runs")
 
     # --- Training Args ---
