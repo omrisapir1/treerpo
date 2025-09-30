@@ -162,7 +162,7 @@ class TreeRPOTrainer(Trainer):
         # Custom data collator for TreeRPO that just passes through the raw data
         if data_collator is None:
             data_collator = self._default_data_collator
-        train_dataset['train'] = train_dataset['train'][:50]
+        train_dataset = train_dataset[:50]
         super().__init__(
             model=model,
             args=args,
