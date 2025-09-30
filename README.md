@@ -66,11 +66,6 @@ This prints both Greedy and Maj@8 accuracies to stdout.
 
 ---
 
-## License
-
-This project is licensed under the **Apache License 2.0**.
-
----
 
 ## Citation
 
